@@ -11,4 +11,4 @@ My name is Josh and I built this site to talk about a combination of two of my p
 
 Feel free to reach out and let me know if you have any questions or if you want to share any thoughts about my work or have any thoughts of your own. Always down to collaborate or talk about exciting ideas within sports. I'm on twitter <a href="http://www.twitter.com/ATJoshBrown">@ATJoshBrown</a> or shoot me an email through the contact tab. Happy Thinking!
 
-<img src="/static/AboutPicture.jpg" alt="Did I mention I went to Georgia Tech?" />
+<img src="AboutPicture.jpg" alt="Did I mention I went to Georgia Tech?" />
