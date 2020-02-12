@@ -1,0 +1,2119 @@
+---
+title: Where's it tough to shoot your (free throw) shot?
+author: Josh Brown
+date: '2020-02-11'
+slug: wheres-it-tough-to-shot-that-free-throw-shot
+categories:
+  - basketball
+  - college
+tags:
+  - analysis
+banner: ''
+description: ''
+images: []
+menu: ''
+---
+
+<script src="/rmarkdown-libs/kePrint/kePrint.js"></script>
+
+
+<p>Georgia Tech was in a close game at the start of the season against NC State. Down 1 in OT with the ball for the final shot. On the final shot though, James Banks, Georgia Tech’s center drew a shooting foul with under 4 seconds left. Maybe not the most ideal situation with Banks being a career 63.6% FT shooter, but Banks hit both free throws and the Tech basketball team got to celebrate with their new tradition of gas station snacks after an ACC road victory! Watching though, I wondered if NC State was a tough place to shot free throws. Free throws are static, in that, their distance from the basket never change and there is no defender effect on the shooter, unlike normal field goals. What some say does have an effect though, are the fans, their yelling, and the craziness that goes on within the student sections.</p>
+<p>Nothing strikes me as NC State being a tough place to shoot free throws, so after having sat on the piece for a little and looking around, I wanted to see if I could quantify if away teams shot worse at certain courts/gyms. Luke Benz has already run some analysis to see if <a href="https://lukebenz.com/post/asu_curtain/">ASU’s Curtain of Distraction had an effect of away teams when shooting at Arizona State</a>. Rather than look at one team though, I wanted to compare free throws of all away teams to see if some places had multiple years of signs of extra misses. Since I’m not looking to show causation, I gathered the box scores from the Kaggle competition for the 2019 NCAA tournament which included the 2002-2003 season through the 2017-2018 season (bummer, but if Kaggle does a 2020 competition and last year’s + this year’s box scores are on there, I’ll do a follow up!).
+First, I want to look at year over year trends for away free throw percentages.</p>
+<pre class="r"><code>#load data
+seasondetaileddataset &lt;- read_csv(&quot;RegularSeasonDetailedResults.csv&quot;) %&gt;% as.data.table()
+Teams &lt;- read_csv(&quot;Teams.csv&quot;) %&gt;% subset(select = -c(3:4))
+
+#change columns to Home and Away stats
+hometeamwin &lt;- seasondetaileddataset[WLoc == &#39;H&#39;]
+awayteamwin &lt;- seasondetaileddataset[WLoc == &#39;A&#39;]
+
+names(hometeamwin) %&lt;&gt;% gsub(pattern=&quot;W&quot;,replacement=&quot;H&quot;) %&gt;% gsub(pattern=&quot;L&quot;,replacement=&quot;A&quot;) %&gt;% gsub(pattern=&quot;HAoc&quot;, replacement = &quot;WLoc&quot;)
+names(awayteamwin) %&lt;&gt;% gsub(pattern=&quot;L&quot;,replacement=&quot;H&quot;) %&gt;% gsub(pattern=&quot;W&quot;,replacement=&quot;A&quot;) %&gt;% gsub(pattern=&quot;AHoc&quot;, replacement = &quot;WLoc&quot;)
+seasondetaileddataset &lt;- rbind(hometeamwin, awayteamwin)
+
+#add new percentages
+seasondetaileddataset$`HFT%` &lt;- (seasondetaileddataset$HFTM/seasondetaileddataset$HFTA)*100
+seasondetaileddataset$`AFT%` &lt;- (seasondetaileddataset$AFTM/seasondetaileddataset$AFTA)*100
+
+seasonsummarystat &lt;- seasondetaileddataset %&gt;%
+  filter(AFTA&gt;0) %&gt;%
+  group_by(Season) %&gt;%
+  summarise(&quot;mediAFT%&quot; = median(`AFT%`),
+            &quot;meanAFT%&quot; = mean(`AFT%`))</code></pre>
+<pre><code>## Warning: Removed 24 rows containing non-finite values (stat_boxplot).</code></pre>
+<p><img src="/post/2020-02-11-wheres-it-tough-to-shoot-your-shot_files/figure-html/unnamed-chunk-3-1.png" width="672" /></p>
+<p>If we take a look at box plots, I take away two things. In more recent years, away teams have started to shoot the ball 1. at a higher percent overall and 2. more frequently hitting more of their free throws as the mean and the lower bounds of the box plots are rising.</p>
+<pre class="r"><code>mediyearPlot = ggplot(seasonsummarystat, aes(x=Season, y=`mediAFT%`), group=Season) + 
+  geom_line()+
+  geom_point()
+mediyearPlot</code></pre>
+<p><img src="/post/2020-02-11-wheres-it-tough-to-shoot-your-shot_files/figure-html/unnamed-chunk-4-1.png" width="672" /></p>
+<pre class="r"><code>meanyearPlot = ggplot(seasonsummarystat, aes(x=Season, y=`meanAFT%`), group=Season) + 
+  geom_line()+
+  geom_point()
+meanyearPlot</code></pre>
+<p><img src="/post/2020-02-11-wheres-it-tough-to-shoot-your-shot_files/figure-html/unnamed-chunk-4-2.png" width="672" />
+Diving a little deeper we’ll also see the mean and median (for those that think the numbers could be skewed) for free throw percentages are rising. Are analytics/shot tracking (arc angle) what’s fueling this?</p>
+<p>Big picture though, I wanted to determine which home teams might have the most help from their court vs the normal Free Throw ability at other away gyms. I opted to run a two proportion z-test on the away team’s free throw makes/attempts at particular courts vs the combined free throw makes/attempts for the season. My process/code:</p>
+<pre class="r"><code>#Add Team Names
+seasondetaileddataset &lt;- merge(x = seasondetaileddataset, y = Teams, by.x = &quot;HTeamID&quot;, by.y = &quot;TeamID&quot;, all.x = T)
+seasondetaileddataset &lt;- merge(x = seasondetaileddataset, y = Teams, by.x = &quot;ATeamID&quot;, by.y = &quot;TeamID&quot;, all.x = T)
+colnames(seasondetaileddataset)[37] &lt;- &quot;HomeTeamName&quot;
+colnames(seasondetaileddataset)[38] &lt;- &quot;AwayTeamName&quot;
+
+#away team summary stats
+awayteamftstats &lt;- seasondetaileddataset[, .(&quot;AT Free Throws Made (AID)&quot; = sum(AFTM),
+                             &quot;AT Free Throws Attempted (AID)&quot; = sum(AFTA)),
+                             keyby = .(Season, AwayTeamName)]
+
+#away team free throw stats based on home court
+homecourtftstats &lt;- seasondetaileddataset[, .(&quot;AT Free Throws Made (HID)&quot; = AFTM,
+                                             &quot;AT Free Throws Attempted (HID)&quot; = AFTA,
+                                             &quot;AT Free Throw Percentage (HID)&quot; = percent(AFTM/AFTA),
+                                             &quot;AwayTeamName&quot; = c(AwayTeamName)),
+                                              keyby = .(Season, HomeTeamName)]
+
+#Away Team Season Free Throws with their FT Stats at FT Stats for individual games
+ftstats &lt;- homecourtftstats[awayteamftstats, on = c(&quot;Season&quot;, &quot;AwayTeamName&quot;)]
+
+#Free Throw Stats by games at home team gym vs whole season
+ftstats &lt;- ftstats[, .(&quot;FT Made @ HID&quot; = sum(`AT Free Throws Made (HID)`),
+                       &quot;FT Attempted @ HID&quot; = sum(`AT Free Throws Attempted (HID)`),
+                       #&quot;AT Free Throw Percentage (HID)&quot; = percent(sum(AFTM)/sum(AFTA)),
+                       &quot;FT Made by all AID&quot; = sum(`AT Free Throws Made (AID)`),
+                       &quot;FT Attempted by all AID&quot; = sum(`AT Free Throws Attempted (AID)`)),
+                        keyby = .(Season, HomeTeamName)]
+
+#proportion test
+lesstesttable &lt;- ftstats %&gt;% mutate(pval = NA)
+for (x in 1:nrow(lesstesttable)) {
+  testy &lt;- prop.test(x = c(lesstesttable$`FT Made @ HID`[x],lesstesttable$`FT Made by all AID`[x]),
+                     n = c(lesstesttable$`FT Attempted @ HID`[x],lesstesttable$`FT Attempted by all AID`[x]),
+                     alternative = &quot;less&quot;,
+                     correct = F)
+  lesstesttable$pval[x] &lt;- testy$p.value
+}
+
+lesstesttable %&lt;&gt;% as.data.table() %&gt;% arrange(pval) %&gt;% filter(pval &lt;= .05)</code></pre>
+<p>After filtering for only significant results (those with a p-value &lt; .05) and sorting from most significant to least, we have a winner!</p>
+<pre class="r"><code>kable(head(lesstesttable,5), align = &quot;c&quot;) %&gt;%
+  kable_styling(bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;responsive&quot;), font_size = 9) %&gt;%
+  row_spec(1, bold = T, color = ncaa_colors$primary_color[ncaa_colors$espn_name == &quot;Northwestern&quot;], background = &quot;white&quot;)</code></pre>
+<table class="table table-striped table-hover table-responsive" style="font-size: 9px; margin-left: auto; margin-right: auto;">
+<thead>
+<tr>
+<th style="text-align:center;">
+Season
+</th>
+<th style="text-align:center;">
+HomeTeamName
+</th>
+<th style="text-align:center;">
+FT Made @ HID
+</th>
+<th style="text-align:center;">
+FT Attempted @ HID
+</th>
+<th style="text-align:center;">
+FT Made by all AID
+</th>
+<th style="text-align:center;">
+FT Attempted by all AID
+</th>
+<th style="text-align:center;">
+pval
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+2014
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+Northwestern
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+203
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+340
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+2868
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+4092
+</td>
+<td style="text-align:center;font-weight: bold;color: #4E2A84 !important;background-color: white !important;">
+0.0000334
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2005
+</td>
+<td style="text-align:center;">
+Prairie View
+</td>
+<td style="text-align:center;">
+138
+</td>
+<td style="text-align:center;">
+265
+</td>
+<td style="text-align:center;">
+1801
+</td>
+<td style="text-align:center;">
+2816
+</td>
+<td style="text-align:center;">
+0.0000645
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2016
+</td>
+<td style="text-align:center;">
+Dayton
+</td>
+<td style="text-align:center;">
+161
+</td>
+<td style="text-align:center;">
+272
+</td>
+<td style="text-align:center;">
+2916
+</td>
+<td style="text-align:center;">
+4186
+</td>
+<td style="text-align:center;">
+0.0001482
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2010
+</td>
+<td style="text-align:center;">
+San Jose St
+</td>
+<td style="text-align:center;">
+131
+</td>
+<td style="text-align:center;">
+230
+</td>
+<td style="text-align:center;">
+2546
+</td>
+<td style="text-align:center;">
+3726
+</td>
+<td style="text-align:center;">
+0.0001724
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+2015
+</td>
+<td style="text-align:center;">
+Old Dominion
+</td>
+<td style="text-align:center;">
+158
+</td>
+<td style="text-align:center;">
+279
+</td>
+<td style="text-align:center;">
+3114
+</td>
+<td style="text-align:center;">
+4650
+</td>
+<td style="text-align:center;">
+0.0001926
+</td>
+</tr>
+</tbody>
+</table>
+<p>Playing at Welsh-Ryan Arena in the 2013-2014 proved to be the most significant difference. So you probably made the assumption that Northwestern had a really good year! Well, no. They went 14-19 on the season and a mere 8-9 at home. If we look at all of Northwestern’s opponents that played at Welsh-Ryan Arena and their away ft shooting %, it does appear it was tough to shoot free throws at Northwestern.</p>
+<pre class="r"><code>#Northwestern Section
+AwayTeamsNorthwestern2014 &lt;- seasondetaileddataset[HomeTeamName == &quot;Northwestern&quot; &amp; Season == &quot;2014&quot;]
+AwayTeamsNorthwestern2014 &lt;- unique(AwayTeamsNorthwestern2014$AwayTeamName)
+Northwestern2014 &lt;- seasondetaileddataset[Season == &quot;2014&quot; &amp; AwayTeamName %in% AwayTeamsNorthwestern2014] %&gt;%
+  select(&quot;AFT%&quot;, &quot;HomeTeamName&quot;, &quot;AwayTeamName&quot;)
+
+
+ggplot(Northwestern2014, aes(x = `AFT%`, y = AwayTeamName)) +
+  geom_point(aes(color = (HomeTeamName != &quot;Northwestern&quot;))) +
+  theme_bw() +
+  theme(legend.position  = &quot;bottom&quot;,
+        plot.title = element_text(size = 16, hjust = 0.5),
+        axis.title = element_text(size = 14)) +
+  labs(x = &quot;Free Throw Percentage&quot;,
+       y = &quot;Team&quot;, 
+       col = &quot;Home Team&quot;,
+       title = &quot;2013-2014 Northwestern Opponent&#39;s Free Throw Shooting&quot;,
+       caption = &quot;Code from Luke Benz // twitter: @recspecs730&quot;) +
+  scale_color_manual(values = c(&quot;gold&quot;, 
+                                ncaa_colors$primary_color[ncaa_colors$espn_name == &quot;Northwestern&quot;]),
+                     labels = c(&quot;Northwestern Home Game&quot;, &quot;Other&quot;))</code></pre>
+<p><img src="/post/2020-02-11-wheres-it-tough-to-shoot-your-shot_files/figure-html/unnamed-chunk-7-1.png" width="672" /></p>
+<p>BIG10 opponents Indiana, Minnesota, Nebraska, and Penn State all had their worst FT shooting performance on the road against Northwestern and only 4 of the 17 teams shot above 70%. Not a good look for the away teams. This was just one season though. When looking at a total for the 15 year period we should look at where’s it been consistently tough to shoot free throws at. Grouping by the home team and tallying the counts of times we see two teams at the top.</p>
+<pre class="r"><code>lessTeamCount &lt;- lesstesttable %&gt;% count(HomeTeamName, sort = T, name = &quot;Seasons of Significant Difference&quot;)
+kable(lessTeamCount, align = &quot;c&quot;) %&gt;%
+  kable_styling(bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;responsive&quot;), font_size = 10) %&gt;%
+  scroll_box(width = &quot;100%&quot;, height = &quot;500px&quot;)</code></pre>
+<div style="border: 1px solid #ddd; padding: 0px; overflow-y: scroll; height:500px; overflow-x: scroll; width:100%; ">
+<table class="table table-striped table-hover table-responsive" style="font-size: 10px; margin-left: auto; margin-right: auto;">
+<thead>
+<tr>
+<th style="text-align:center;position: sticky; top:0; background-color: #FFFFFF;">
+HomeTeamName
+</th>
+<th style="text-align:center;position: sticky; top:0; background-color: #FFFFFF;">
+Seasons of Significant Difference
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;">
+Gonzaga
+</td>
+<td style="text-align:center;">
+7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UT Arlington
+</td>
+<td style="text-align:center;">
+7
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Louisville
+</td>
+<td style="text-align:center;">
+5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Marshall
+</td>
+<td style="text-align:center;">
+5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Purdue
+</td>
+<td style="text-align:center;">
+5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UNC Wilmington
+</td>
+<td style="text-align:center;">
+5
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Ga Southern
+</td>
+<td style="text-align:center;">
+4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Massachusetts
+</td>
+<td style="text-align:center;">
+4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Memphis
+</td>
+<td style="text-align:center;">
+4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Stanford
+</td>
+<td style="text-align:center;">
+4
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+American Univ
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Cleveland St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colorado
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Coppin St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+E Michigan
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Florida Intl
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Georgia Tech
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Hampton
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Iowa
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Liberty
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Long Beach St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Michigan St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Mississippi St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Northwestern
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Old Dominion
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Prairie View
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Southern Miss
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+St Joseph’s PA
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Syracuse
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Tulsa
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UT San Antonio
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Utah St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Vanderbilt
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Villanova
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Virginia
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Virginia Tech
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Wichita St
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Wisconsin
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Xavier
+</td>
+<td style="text-align:center;">
+3
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Alabama
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Alabama A&amp;M
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Arizona
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Arizona St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Army
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Baylor
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bowling Green
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bradley
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Bucknell
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+BYU
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Cincinnati
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Coastal Car
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Col Charleston
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Colgate
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Davidson
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Dayton
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Drake
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Duke
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+F Dickinson
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+FL Gulf Coast
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Fresno St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Furman
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+G Washington
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Georgia
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Grambling
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Illinois
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Illinois St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Indiana St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Iona
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Louisiana Tech
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loy Marymount
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Mercer
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Miami FL
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Missouri KC
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Monmouth NJ
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Montana St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Mt St Mary’s
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Nebraska
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+New Hampshire
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+New Orleans
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+North Carolina
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Northwestern LA
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Oklahoma
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Pepperdine
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Pittsburgh
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Princeton
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+S Dakota St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+S Illinois
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+San Diego St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+San Francisco
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Savannah St
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Seton Hall
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+SF Austin
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Siena
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+South Florida
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+St John’s
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+St Mary’s CA
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Tennessee Tech
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Texas A&amp;M
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UNC Asheville
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UNLV
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Utah
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Utah Valley
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+VMI
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Washington
+</td>
+<td style="text-align:center;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Abilene Chr
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Akron
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Albany NY
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Alcorn St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Appalachian St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Arkansas
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Auburn
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Ball St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Binghamton
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston College
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Boston Univ
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Brown
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Buffalo
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Butler
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+C Michigan
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Cent Arkansas
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Central Conn
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Charleston So
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Columbia
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Connecticut
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Creighton
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+CS Sacramento
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Delaware St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Denver
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+E Illinois
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+E Washington
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Elon
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Evansville
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Fairfield
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+FL Atlantic
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Florida
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Florida A&amp;M
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Florida St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Fordham
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Gardner Webb
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+George Mason
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Georgetown
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Grand Canyon
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Hartford
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Hawaii
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Hofstra
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Holy Cross
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Houston
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Indiana
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+IPFW
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+IUPUI
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Kentucky
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lafayette
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lehigh
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Lipscomb
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola MD
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Loyola-Chicago
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+LSU
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Maine
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Marquette
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Maryland
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Michigan
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Mississippi
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Missouri St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Morgan St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+MTSU
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Murray St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+N Illinois
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+N Kentucky
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Navy
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+NC A&amp;T
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+NC Central
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+New Mexico St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Norfolk St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Notre Dame
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Oakland
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Ohio
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Oklahoma St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Oral Roberts
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Pacific
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Penn
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Penn St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Portland
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Presbyterian
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Providence
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Quinnipiac
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Radford
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Rhode Island
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Rider
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Robert Morris
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+San Jose St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Santa Barbara
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+SE Louisiana
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+SMU
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+South Carolina
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Southern Utah
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+St Francis PA
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+St Louis
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Stony Brook
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+TCU
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Texas
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Texas Tech
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+TN Martin
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Toledo
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Towson
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Tulane
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+TX Southern
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UAB
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UC Davis
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UC Riverside
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UCF
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UCLA
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+ULL
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UNC Greensboro
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+USC
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+UTEP
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+VA Commonwealth
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Valparaiso
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Vermont
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+W Illinois
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+W Michigan
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+W Salem St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Washington St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+West Virginia
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+WI Green Bay
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Winthrop
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Wyoming
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:center;">
+Youngstown St
+</td>
+<td style="text-align:center;">
+1
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Gonzaga and the University of Texas-Arlington are those two teams where away teams seem to tremble at the free throw line. Again, without looking at causation, I can’t prove why, but feel free to make your own assumption. My opinion for Gonzaga is that many West Coast Conference (WCC) teams roll into McCarthy Athletic Center while Gonzaga is ranked, and the atmosphere is not like any others in the WCC. They’ve created a dynasty up in the corner of Washington that other non-conference opponents are not ready for. For UTA, I don’t have a great guess as to why it is tough. 5 of their 7 seasons of significant difference came between 2012-2017 after College Park Center, their home gym, was built. If anyone wants to explain me what’s going on in Arlington, Texas though, my DMs are open.</p>
+<p>Concluding, it’s not always the blue blood schools that have the toughest gyms to shoot FTs in with loud students and fans yelling obnoxious phrases and waving their arms around behind the backboard. I also thought Syracuse might show up because of the depth of shot inside the Carrier Dome. You must remember though: Free Throws are the same distance and shot on the same height goal at every gym (See the Hoosiers clip where they walk into the Championship gym for the first time).</p>
+<p>When Kaggle comes out with their 2020 March Madness tournament, I’ll look to post a follow up including the 2018-2019 and 2019-2020 seasons. I’d like to take Luke Benz’s ncaahoopr package and throw out the any free throws shot when Win Percentage is not in the 20-80% range. This would eliminate garbage time free throws that Northwestern might have seen in 2013-2014 or Gonzaga on a constant basis. Oh, and I checked to see how many times NC State showed up on the tally list for significant difference. They didn’t. 😊 Go Jackets!</p>
+<center>
+<blockquote class="twitter-tweet">
+<p lang="en" dir="ltr">
+<p>A 🆆 on Saturday in Chapel Hill = ⛽️snacks!<br><br>The Jackets are back at McCamish Wednesday night vs. Duke.</p>
+<a href="https://twitter.com/hashtag/BuiltDifferent?src=hash&amp;ref_src=twsrc%5Etfw">#BuiltDifferent</a> /// <a href="https://twitter.com/hashtag/TogetherWeSwarm?src=hash&amp;ref_src=twsrc%5Etfw">#TogetherWeSwarm</a> <a href="https://t.co/BOxAabSGLD">pic.twitter.com/BOxAabSGLD</a>
+</p>
+— Georgia Tech Basketball (<span class="citation">@GTMBB</span>) <a href="https://twitter.com/GTMBB/status/1214260701293727744?ref_src=twsrc%5Etfw">January 6, 2020</a>
+</blockquote>
+<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+<center/>

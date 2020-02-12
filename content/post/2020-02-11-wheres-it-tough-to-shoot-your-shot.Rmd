@@ -1,0 +1,172 @@
+---
+title: Where's it tough to shoot your (free throw) shot?
+author: Josh Brown
+date: '2020-02-11'
+slug: wheres-it-tough-to-shot-that-free-throw-shot
+categories:
+  - basketball
+  - college
+tags:
+  - analysis
+banner: ''
+description: ''
+images: []
+menu: ''
+---
+
+```{r,echo=FALSE,results='hide',message=FALSE}
+library(magrittr)
+library(readr)
+library(data.table)
+library(ggplot2)
+library(scales)
+library(dplyr)
+#devtools::install_github("lbenz730/ncaahoopR")
+library(ncaahoopR)
+library(knitr)
+#install.packages("kableExtra")
+library(kableExtra)
+```
+Georgia Tech was in a close game at the start of the season against NC State. Down 1 in OT with the ball for the final shot. On the final shot though, James Banks, Georgia Tech’s center drew a shooting foul with under 4 seconds left. Maybe not the most ideal situation with Banks being a career 63.6% FT shooter, but Banks hit both free throws and the Tech basketball team got to celebrate with their new tradition of gas station snacks after an ACC road victory! Watching though, I wondered if NC State was a tough place to shot free throws. Free throws are static, in that, their distance from the basket never change and there is no defender effect on the shooter, unlike normal field goals. What some say does have an effect though, are the fans, their yelling, and the craziness that goes on within the student sections.
+
+Nothing strikes me as NC State being a tough place to shoot free throws, so after having sat on the piece for a little and looking around, I wanted to see if I could quantify if away teams shot worse at certain courts/gyms. Luke Benz has already run some analysis to see if [ASU’s Curtain of Distraction had an effect of away teams when shooting at Arizona State](https://lukebenz.com/post/asu_curtain/). Rather than look at one team though, I wanted to compare free throws of all away teams to see if some places had multiple years of signs of extra misses. Since I’m not looking to show causation, I gathered the box scores from the Kaggle competition for the 2019 NCAA tournament which included the 2002-2003 season through the 2017-2018 season (bummer, but if Kaggle does a 2020 competition and last year’s + this year’s box scores are on there, I’ll do a follow up!). 
+First, I want to look at year over year trends for away free throw percentages. 
+```{r,message=FALSE}
+#load data
+seasondetaileddataset <- read_csv("RegularSeasonDetailedResults.csv") %>% as.data.table()
+Teams <- read_csv("Teams.csv") %>% subset(select = -c(3:4))
+
+#change columns to Home and Away stats
+hometeamwin <- seasondetaileddataset[WLoc == 'H']
+awayteamwin <- seasondetaileddataset[WLoc == 'A']
+
+names(hometeamwin) %<>% gsub(pattern="W",replacement="H") %>% gsub(pattern="L",replacement="A") %>% gsub(pattern="HAoc", replacement = "WLoc")
+names(awayteamwin) %<>% gsub(pattern="L",replacement="H") %>% gsub(pattern="W",replacement="A") %>% gsub(pattern="AHoc", replacement = "WLoc")
+seasondetaileddataset <- rbind(hometeamwin, awayteamwin)
+
+#add new percentages
+seasondetaileddataset$`HFT%` <- (seasondetaileddataset$HFTM/seasondetaileddataset$HFTA)*100
+seasondetaileddataset$`AFT%` <- (seasondetaileddataset$AFTM/seasondetaileddataset$AFTA)*100
+
+seasonsummarystat <- seasondetaileddataset %>%
+  filter(AFTA>0) %>%
+  group_by(Season) %>%
+  summarise("mediAFT%" = median(`AFT%`),
+            "meanAFT%" = mean(`AFT%`))
+```
+```{r,echo=FALSE}
+yearPlot = ggplot(seasondetaileddataset, aes(x=Season, y=`AFT%`, group=Season)) + geom_boxplot()
+yearPlot
+```
+
+If we take a look at box plots, I take away two things. In more recent years, away teams have started to shoot the ball 1. at a higher percent overall and 2. more frequently hitting more of their free throws as the mean and the lower bounds of the box plots are rising. 
+
+```{r}
+mediyearPlot = ggplot(seasonsummarystat, aes(x=Season, y=`mediAFT%`), group=Season) + 
+  geom_line()+
+  geom_point()
+mediyearPlot
+
+meanyearPlot = ggplot(seasonsummarystat, aes(x=Season, y=`meanAFT%`), group=Season) + 
+  geom_line()+
+  geom_point()
+meanyearPlot
+```
+Diving a little deeper we’ll also see the mean and median (for those that think the numbers could be skewed) for free throw percentages are rising. Are analytics/shot tracking (arc angle) what's fueling this? 
+
+Big picture though, I wanted to determine which home teams might have the most help from their court vs the normal Free Throw ability at other away gyms. I opted to run a two proportion z-test on the away team’s free throw makes/attempts at particular courts vs the combined free throw makes/attempts for the season. My process/code:
+```{r,results='hide'}
+#Add Team Names
+seasondetaileddataset <- merge(x = seasondetaileddataset, y = Teams, by.x = "HTeamID", by.y = "TeamID", all.x = T)
+seasondetaileddataset <- merge(x = seasondetaileddataset, y = Teams, by.x = "ATeamID", by.y = "TeamID", all.x = T)
+colnames(seasondetaileddataset)[37] <- "HomeTeamName"
+colnames(seasondetaileddataset)[38] <- "AwayTeamName"
+
+#away team summary stats
+awayteamftstats <- seasondetaileddataset[, .("AT Free Throws Made (AID)" = sum(AFTM),
+                             "AT Free Throws Attempted (AID)" = sum(AFTA)),
+                             keyby = .(Season, AwayTeamName)]
+
+#away team free throw stats based on home court
+homecourtftstats <- seasondetaileddataset[, .("AT Free Throws Made (HID)" = AFTM,
+                                             "AT Free Throws Attempted (HID)" = AFTA,
+                                             "AT Free Throw Percentage (HID)" = percent(AFTM/AFTA),
+                                             "AwayTeamName" = c(AwayTeamName)),
+                                              keyby = .(Season, HomeTeamName)]
+
+#Away Team Season Free Throws with their FT Stats at FT Stats for individual games
+ftstats <- homecourtftstats[awayteamftstats, on = c("Season", "AwayTeamName")]
+
+#Free Throw Stats by games at home team gym vs whole season
+ftstats <- ftstats[, .("FT Made @ HID" = sum(`AT Free Throws Made (HID)`),
+                       "FT Attempted @ HID" = sum(`AT Free Throws Attempted (HID)`),
+                       #"AT Free Throw Percentage (HID)" = percent(sum(AFTM)/sum(AFTA)),
+                       "FT Made by all AID" = sum(`AT Free Throws Made (AID)`),
+                       "FT Attempted by all AID" = sum(`AT Free Throws Attempted (AID)`)),
+                        keyby = .(Season, HomeTeamName)]
+
+#proportion test
+lesstesttable <- ftstats %>% mutate(pval = NA)
+for (x in 1:nrow(lesstesttable)) {
+  testy <- prop.test(x = c(lesstesttable$`FT Made @ HID`[x],lesstesttable$`FT Made by all AID`[x]),
+                     n = c(lesstesttable$`FT Attempted @ HID`[x],lesstesttable$`FT Attempted by all AID`[x]),
+                     alternative = "less",
+                     correct = F)
+  lesstesttable$pval[x] <- testy$p.value
+}
+
+lesstesttable %<>% as.data.table() %>% arrange(pval) %>% filter(pval <= .05)
+```
+
+After filtering for only significant results (those with a p-value < .05) and sorting from most significant to least, we have a winner!
+
+```{r}
+kable(head(lesstesttable,5), align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), font_size = 9) %>%
+  row_spec(1, bold = T, color = ncaa_colors$primary_color[ncaa_colors$espn_name == "Northwestern"], background = "white")
+```
+
+Playing at Welsh-Ryan Arena in the 2013-2014 proved to be the most significant difference. So you probably made the assumption that Northwestern had a really good year! Well, no. They went 14-19 on the season and a mere 8-9 at home. If we look at all of Northwestern’s opponents that played at Welsh-Ryan Arena and their away ft shooting %, it does appear it was tough to shoot free throws at Northwestern.
+
+```{r}
+#Northwestern Section
+AwayTeamsNorthwestern2014 <- seasondetaileddataset[HomeTeamName == "Northwestern" & Season == "2014"]
+AwayTeamsNorthwestern2014 <- unique(AwayTeamsNorthwestern2014$AwayTeamName)
+Northwestern2014 <- seasondetaileddataset[Season == "2014" & AwayTeamName %in% AwayTeamsNorthwestern2014] %>%
+  select("AFT%", "HomeTeamName", "AwayTeamName")
+
+
+ggplot(Northwestern2014, aes(x = `AFT%`, y = AwayTeamName)) +
+  geom_point(aes(color = (HomeTeamName != "Northwestern"))) +
+  theme_bw() +
+  theme(legend.position  = "bottom",
+        plot.title = element_text(size = 16, hjust = 0.5),
+        axis.title = element_text(size = 14)) +
+  labs(x = "Free Throw Percentage",
+       y = "Team", 
+       col = "Home Team",
+       title = "2013-2014 Northwestern Opponent's Free Throw Shooting",
+       caption = "Code from Luke Benz // twitter: @recspecs730") +
+  scale_color_manual(values = c("gold", 
+                                ncaa_colors$primary_color[ncaa_colors$espn_name == "Northwestern"]),
+                     labels = c("Northwestern Home Game", "Other"))
+```
+
+BIG10 opponents Indiana, Minnesota, Nebraska, and Penn State all had their worst FT shooting performance on the road against Northwestern and only 4 of the 17 teams shot above 70%. Not a good look for the away teams. This was just one season though. When looking at a total for the 15 year period we should look at where’s it been consistently tough to shoot free throws at. Grouping by the home team and tallying the counts of times  we see two teams at the top.
+
+```{r}
+lessTeamCount <- lesstesttable %>% count(HomeTeamName, sort = T, name = "Seasons of Significant Difference")
+kable(lessTeamCount, align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), font_size = 10) %>%
+  scroll_box(width = "100%", height = "500px")
+```
+
+Gonzaga and the University of Texas-Arlington are those two teams where away teams seem to tremble at the free throw line. Again, without looking at causation, I can’t prove why, but feel free to make your own assumption. My opinion for Gonzaga is that many West Coast Conference (WCC) teams roll into McCarthy Athletic Center while Gonzaga is ranked, and the atmosphere is not like any others in the WCC. They’ve created a dynasty up in the corner of Washington that other non-conference opponents are not ready for. For UTA, I don’t have a great guess as to why it is tough. 5 of their 7 seasons of significant difference came between 2012-2017 after College Park Center, their home gym, was built. If anyone wants to explain me what’s going on in Arlington, Texas though, my DMs are open.
+
+Concluding, it’s not always the blue blood schools that have the toughest gyms to shoot FTs in with loud students and fans yelling obnoxious phrases and waving their arms around behind the backboard. I also thought Syracuse might show up because of the depth of shot inside the Carrier Dome. You must remember though: Free Throws are the same distance and shot on the same height goal at every gym (See the Hoosiers clip where they walk into the Championship gym for the first time). 
+
+When Kaggle comes out with their 2020 March Madness tournament, I’ll look to post a follow up including the 2018-2019 and 2019-2020 seasons. I’d like to take Luke Benz’s ncaahoopr package and throw out the any free throws shot when Win Percentage is not in the 20-80% range. This would eliminate garbage time free throws that Northwestern might have seen in 2013-2014 or Gonzaga on a constant basis. Oh, and I checked to see how many times NC State showed up on the tally list for significant difference. They didn’t. 😊 Go Jackets!
+
+<center><blockquote class="twitter-tweet"><p lang="en" dir="ltr">A 🆆 on Saturday in Chapel Hill = ⛽️snacks!<br><br>The Jackets are back at McCamish Wednesday night vs. Duke. 
+
+<a href="https://twitter.com/hashtag/BuiltDifferent?src=hash&amp;ref_src=twsrc%5Etfw">#BuiltDifferent</a> /// <a href="https://twitter.com/hashtag/TogetherWeSwarm?src=hash&amp;ref_src=twsrc%5Etfw">#TogetherWeSwarm</a> <a href="https://t.co/BOxAabSGLD">pic.twitter.com/BOxAabSGLD</a></p>&mdash; Georgia Tech Basketball (@GTMBB) <a href="https://twitter.com/GTMBB/status/1214260701293727744?ref_src=twsrc%5Etfw">January 6, 2020</a></blockquote> <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script><center/>
